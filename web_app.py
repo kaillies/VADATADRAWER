@@ -84,7 +84,7 @@ def _number(value):
 def extract_screenshot_candidates(uploaded_files):
     kda_pattern = re.compile(r'(\d{1,2})\s*[/:|丨]\s*(\d{1,2})\s*[/:|丨]\s*(\d{1,2})')
     pair_pattern = re.compile(r'(\d{1,4})\s*/\s*(\d{1,4})')
-    name_pattern = re.compile(r'([A-Za-z\u4e00-\u9fff][A-Za-z0-9\u4e00-\u9fff_ ]{0,24}#\s*\d{3,6})')
+    name_pattern = re.compile(r'([A-Za-z\u4e00-\u9fff][A-Za-z0-9\u4e00-\u9fff_ ]{0,24}(?:#\s*)?\d{3,6})')
     all_candidates = []
     raw_texts = []
 
@@ -100,7 +100,7 @@ def extract_screenshot_candidates(uploaded_files):
             if not match:
                 continue
             prefix = line[:match.start()].strip(' |-:：')
-            name_match = name_pattern.search(prefix)
+            name_match = name_pattern.search(prefix) or name_pattern.search(' '.join(lines[line_index:line_index + 4]))
             name = re.sub(r'\s*#\s*', '#', name_match.group(1)).strip() if name_match else ''
             prefix_numbers = re.findall(r'(?<!/)(\d+(?:\.\d+)?)', prefix)
             stats = (_number(match.group(1)), _number(match.group(2)), _number(match.group(3)))
@@ -126,19 +126,20 @@ def extract_screenshot_candidates(uploaded_files):
         selected = occurrences[-5:] if len(occurrences) >= 15 else unique[:5]
         for candidate in selected:
             block_start = candidate['_line_index']
-            following = [line for line in lines[block_start:block_start + 32] if line]
+            following = [line for line in lines[block_start:block_start + 40] if line]
             block_text = ' '.join(following)
-            pairs = pair_pattern.findall(block_text)
+            detail_text = ' '.join(following[1:])
+            pairs = pair_pattern.findall(detail_text)
             if pairs:
                 candidate['dmg'] = _number(pairs[0][0])
+            score_match = re.search(r'(?:战斗|得分|评分)[^\d]{0,16}([1-5]\d{2})', block_text)
+            if score_match:
+                candidate['acs'] = _number(score_match.group(1))
             for labels, field in ((('首杀', '首次击杀', 'first'), 'first'), (('回合伤害', '伤害', 'dmg'), 'dmg')):
                 label_pattern = '|'.join(re.escape(label) for label in labels)
                 label_match = re.search(rf'(?:{label_pattern})[^\d]{{0,12}}(\d+(?:\.\d+)?)', block_text, re.IGNORECASE)
                 if label_match:
                     candidate[field] = _number(label_match.group(1))
-            summary = summary_by_stats.get((candidate['k'], candidate['d'], candidate['a']))
-            if summary and summary['acs']:
-                candidate['acs'] = summary['acs']
             candidate.pop('_line_index', None)
         all_candidates.extend(selected)
 
