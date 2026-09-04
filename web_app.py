@@ -323,8 +323,12 @@ def prepare_players(players):
 def make_chart(pairings, min_vals, max_vals):
     angles = np.linspace(0, 2 * np.pi, len(LABELS), endpoint=False).tolist()
     closed_angles = angles + angles[:1]
-    figure, axes = plt.subplots(2, 3, figsize=(16, 10), subplot_kw={'polar': True})
-    axes_flat = axes.flatten()
+    figure, axes = plt.subplots(
+        len(pairings), 1,
+        figsize=(15, max(8, len(pairings) * 7)),
+        subplot_kw={'polar': True},
+    )
+    axes_flat = np.atleast_1d(axes).flatten()
     for index, (red, blue) in enumerate(pairings):
         axis = axes_flat[index]
         axis.set_theta_offset(np.pi / 2 - np.pi / 6)
@@ -344,18 +348,16 @@ def make_chart(pairings, min_vals, max_vals):
         axis.set_yticklabels(['20', '40', '60', '80', '100'], fontsize=7)
         axis.grid(True, linestyle='--', alpha=0.6)
         axis.set_title(f'组{index + 1}: {red["display_name"]} vs {blue["display_name"]}', fontsize=11, pad=14)
-        axis.legend(loc='upper right', bbox_to_anchor=(1.08, 1.0), fontsize=8)
-    for axis in axes_flat[len(pairings):]:
-        axis.axis('off')
+        axis.legend(loc='upper right', bbox_to_anchor=(1.08, 1.0), fontsize=9)
     figure.suptitle('无畏契约对位雷达图', fontsize=19, fontweight='bold')
-    figure.tight_layout(rect=(0.06, 0.02, 0.94, 0.94))
+    figure.tight_layout(rect=(0.12, 0.02, 0.88, 0.94), h_pad=4.0)
     for index, (red, blue) in enumerate(pairings):
         axis_position = axes_flat[index].get_position()
-        for x_position, player in ((axis_position.x0 - 0.035, red), (axis_position.x1 + 0.035, blue)):
+        for x_position, player in ((axis_position.x0 - 0.075, red), (axis_position.x1 + 0.075, blue)):
             avatar = load_agent_image(player.get('icon_url'))
             if avatar is not None:
                 figure.add_artist(AnnotationBbox(
-                    OffsetImage(avatar, zoom=0.12),
+                    OffsetImage(avatar, zoom=0.16),
                     (x_position, axis_position.y0 + axis_position.height / 2),
                     xycoords=figure.transFigure,
                     frameon=True,
@@ -426,9 +428,6 @@ if not red_team or not blue_team:
 if len(red_team) != 5 or len(blue_team) != 5:
     st.warning(f'当前读取我方 {len(red_team)} 人、敌方 {len(blue_team)} 人，建议双方各 5 人。')
 
-st.subheader('拖动设置对位')
-st.caption('先为选手选择英雄，再拖动头像排序；两列中相同序号的英雄会进行对位。')
-
 agent_icons = load_agent_icons()
 hero_names = {}
 for player in players:
@@ -439,6 +438,14 @@ for player in players:
         format_func=lambda label: label,
         key=f'hero_{player_name}',
     )
+
+heroes_selected = all(hero_names.values()) and all(hero != '请选择英雄' for hero in hero_names.values())
+if not heroes_selected:
+    st.info('请先为所有选手选择英雄，完成后将显示拖动对位设置。')
+    st.stop()
+
+st.subheader('拖动设置对位')
+st.caption('拖动双方英雄名称调整顺序；两列中相同序号的英雄会进行对位。')
 
 def draggable_team(team, label, key):
     names = [f'{hero_names.get(str(player["name"]), "请选择英雄")}  ·  {player["name"]}' for player in team]
