@@ -155,7 +155,7 @@ def _number(value):
 def extract_screenshot_candidates(uploaded_files):
     kda_pattern = re.compile(r'(\d{1,2})\s*[/:|丨]\s*(\d{1,2})\s*[/:|丨]\s*(\d{1,2})')
     pair_pattern = re.compile(r'(\d{1,4})\s*/\s*(\d{1,4})')
-    name_pattern = re.compile(r'([A-Za-z\u4e00-\u9fff][A-Za-z0-9\u4e00-\u9fff_ ]{0,24}(?:#\s*)?\d{3,6})')
+    name_pattern = re.compile(r'([A-Za-z\u4e00-\u9fff][A-Za-z0-9\u4e00-\u9fff_]{0,24}[#＃]\s*\d{3,6})')
     all_candidates = []
     raw_texts = []
 
@@ -181,8 +181,13 @@ def extract_screenshot_candidates(uploaded_files):
             block_text = ' '.join(block_lines)
             after_kda = block_text[kda_match.end():]
             stats = tuple(_number(value) for value in kda_match.groups())
-            name_match = name_pattern.search(block_text)
-            name = re.sub(r'\s*#\s*', '#', name_match.group(1)).strip() if name_match else ''
+            normalized_block = re.sub(r'(?<=[A-Za-z\u4e00-\u9fff0-9_])\s+(?=[A-Za-z\u4e00-\u9fff0-9_#])', '', block_text)
+            name_matches = name_pattern.findall(normalized_block)
+            name = name_matches[-1].replace('＃', '#') if name_matches else ''
+            if name:
+                first_cjk = re.search(r'[\u4e00-\u9fff]', name)
+                if first_cjk:
+                    name = name[first_cjk.start():]
             score_values = re.findall(r'(?<![/\d])([1-5]\d{2})(?![/\d])', after_kda)
             candidate = {
                 'name': name or f'待确认选手{index + 1}',
