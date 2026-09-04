@@ -82,85 +82,68 @@ def _number(value):
 
 
 def extract_screenshot_candidates(uploaded_files):
-    lines = []
-    for uploaded_file in uploaded_files:
-        image = Image.open(io.BytesIO(uploaded_file.getvalue())).convert('RGB')
-        image.thumbnail((900, 6000), Image.Resampling.LANCZOS)
-        lines.extend(_ocr_lines(image))
-
-    candidates = []
     kda_pattern = re.compile(r'(\d{1,2})\s*[/:|丨]\s*(\d{1,2})\s*[/:|丨]\s*(\d{1,2})')
-    for line in lines:
-        match = kda_pattern.search(line)
-        if not match:
-            continue
-        prefix = line[:match.start()].strip(' |-:：')
-        name_match = re.search(r'[\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_#-]{1,24}', prefix)
-        name = name_match.group(0) if name_match else f'待确认选手{len(candidates) + 1}'
-        prefix_numbers = re.findall(r'(?<!/)(\d+(?:\.\d+)?)', prefix)
-        trailing_numbers = re.findall(r'(?<!/)(\d+(?:\.\d+)?)', line[match.end():])
-        acs = _number(prefix_numbers[-1]) if prefix_numbers else _number(trailing_numbers[0]) if trailing_numbers else 0
-        candidates.append({
-            'name': name,
-            'team': '我方' if len(candidates) < 5 else '敌方',
-            'k': _number(match.group(1)),
-            'd': _number(match.group(2)),
-            'a': _number(match.group(3)),
-            'first': 0,
-            'dmg': 0,
-            'acs': acs,
-        })
-
-    names = []
+    pair_pattern = re.compile(r'(\d{1,4})\s*/\s*(\d{1,4})')
     name_pattern = re.compile(r'([A-Za-z\u4e00-\u9fff][A-Za-z0-9\u4e00-\u9fff_ ]{0,24}#\s*\d{3,6})')
-    for line in lines:
-        match = name_pattern.search(line)
-        if match:
-            names.append(re.sub(r'\s*#\s*', '#', match.group(1)).strip())
+    all_candidates = []
+    raw_texts = []
 
-    def labeled_values(label):
-        values = []
-        pattern = re.compile(rf'{label}\s*[:：]?\s*(\d+(?:\.\d+)?)')
-        for line in lines:
-            match = pattern.search(line)
-            if match:
-                values.append(_number(match.group(1)))
-        return values
+    for uploaded_file, team in uploaded_files:
+        image = Image.open(io.BytesIO(uploaded_file.getvalue())).convert('RGB')
+        image.thumbnail((1000, 6500), Image.Resampling.LANCZOS)
+        lines = _ocr_lines(image)
+        raw_texts.append(f'[{uploaded_file.name} / {team}]\n' + '\n'.join(lines))
+        occurrences = []
+        summary_by_stats = {}
+        for line_index, line in enumerate(lines):
+            match = kda_pattern.search(line)
+            if not match:
+                continue
+            prefix = line[:match.start()].strip(' |-:：')
+            name_match = name_pattern.search(prefix)
+            name = re.sub(r'\s*#\s*', '#', name_match.group(1)).strip() if name_match else ''
+            prefix_numbers = re.findall(r'(?<!/)(\d+(?:\.\d+)?)', prefix)
+            stats = (_number(match.group(1)), _number(match.group(2)), _number(match.group(3)))
+            candidate = {
+                'name': name or f'待确认选手{len(occurrences) + 1}',
+                'team': team, 'k': stats[0], 'd': stats[1], 'a': stats[2],
+                'first': 0, 'dmg': 0, 'acs': _number(prefix_numbers[-1]) if prefix_numbers else 0,
+                '_line_index': line_index,
+            }
+            occurrences.append(candidate)
+            summary_by_stats.setdefault(stats, candidate)
 
-    acs_values = labeled_values('战斗得分')
-    first_values = labeled_values('首杀')
-    damage_values = labeled_values('回合伤害')
-    unique_candidates = []
-    seen_stats = set()
-    for candidate in candidates:
-        stat_key = (candidate['k'], candidate['d'], candidate['a'])
-        if stat_key not in seen_stats:
-            unique_candidates.append(candidate)
-            seen_stats.add(stat_key)
-    candidates = unique_candidates
-    for index, candidate in enumerate(candidates):
-        if index < len(names):
-            candidate['name'] = names[index]
-        if index < len(acs_values):
-            candidate['acs'] = acs_values[index]
-        if index < len(first_values):
-            candidate['first'] = first_values[index]
-        if index < len(damage_values):
-            candidate['dmg'] = damage_values[index]
-    for index, candidate in enumerate(candidates):
-        candidate['team'] = '我方' if index < (len(candidates) + 1) // 2 else '敌方'
+        unique = []
+        seen_stats = set()
+        for candidate in occurrences:
+            stats = (candidate['k'], candidate['d'], candidate['a'])
+            if stats not in seen_stats:
+                unique.append(candidate)
+                seen_stats.add(stats)
 
-    detail_pairs = []
-    pair_pattern = re.compile(r'(\d{1,4})\s*/\s*\d{1,4}')
-    for line in lines:
-        pairs = pair_pattern.findall(line)
-        if len(pairs) >= 4:
-            detail_pairs.append([_number(pair[0]) for pair in pairs[:4]])
-    for candidate, detail in zip(candidates, detail_pairs):
-        candidate['dmg'] = detail[0]
-    if not candidates:
-        raise ValueError('没有识别到 KDA 数据。请上传同一场比赛的结算总览图和详细表现图。')
-    return candidates, '\n'.join(lines)
+        # The long mobile result page repeats the five expanded cards after the
+        # ten compact scoreboard rows. Prefer those last five records.
+        selected = occurrences[-5:] if len(occurrences) >= 15 else unique[:5]
+        for candidate in selected:
+            block_start = candidate['_line_index']
+            following = [line for line in lines[block_start:block_start + 18] if line]
+            detail_line = next((line for line in following if len(pair_pattern.findall(line)) >= 4), '')
+            pairs = pair_pattern.findall(detail_line)
+            if pairs:
+                candidate['dmg'] = _number(pairs[0][0])
+            for label, field in (('首杀', 'first'), ('回合伤害', 'dmg')):
+                label_match = next((re.search(rf'{label}\s*[:：]?\s*(\d+(?:\.\d+)?)', line) for line in following), None)
+                if label_match:
+                    candidate[field] = _number(label_match.group(1))
+            summary = summary_by_stats.get((candidate['k'], candidate['d'], candidate['a']))
+            if summary and summary['acs']:
+                candidate['acs'] = summary['acs']
+            candidate.pop('_line_index', None)
+        all_candidates.extend(selected)
+
+    if not all_candidates:
+        raise ValueError('没有识别到 KDA 数据。请确认上传的是包含选手 KDA 的结算截图。')
+    return all_candidates, '\n\n'.join(raw_texts)
 
 
 def editable_players(players):
@@ -251,15 +234,22 @@ st.caption('支持结算截图 OCR，也支持 CSV、JSON 和 Excel。截图识�
 source = st.radio('数据来源', ['上传截图', '上传 CSV / JSON / Excel'], horizontal=True)
 players = None
 if source == '上传截图':
-    st.info('请上传同一场比赛的两张图：结算总览图和详细表现图。红色识别为敌方，绿色或黄色识别为我方。')
-    screenshots = st.file_uploader(
-        '上传结算截图（建议同时上传两张）',
-        type=['png', 'jpg', 'jpeg', 'webp'],
-        accept_multiple_files=True,
-    )
-    if screenshots and st.button('识别截图数据', type='primary'):
+    st.info('请分别上传两张同一场比赛的详情截图，并明确选择每张图属于我方还是敌方。程序会读取该图中展开的 5 名选手。')
+    left_upload, right_upload = st.columns(2)
+    with left_upload:
+        own_screenshot = st.file_uploader('上传一方详情截图', type=['png', 'jpg', 'jpeg', 'webp'], key='own_screenshot')
+        own_team = st.selectbox('这张图的队伍', ['我方', '敌方'], key='own_team')
+    with right_upload:
+        enemy_screenshot = st.file_uploader('上传另一方详情截图', type=['png', 'jpg', 'jpeg', 'webp'], key='enemy_screenshot')
+        enemy_team = st.selectbox('这张图的队伍', ['敌方', '我方'], key='enemy_team')
+    screenshot_inputs = []
+    if own_screenshot:
+        screenshot_inputs.append((own_screenshot, own_team))
+    if enemy_screenshot:
+        screenshot_inputs.append((enemy_screenshot, enemy_team))
+    if screenshot_inputs and st.button('识别截图数据', type='primary'):
         try:
-            recognized, raw_text = extract_screenshot_candidates(screenshots)
+            recognized, raw_text = extract_screenshot_candidates(screenshot_inputs)
             st.session_state['ocr_players'] = recognized
             st.session_state['ocr_text'] = raw_text
         except Exception as error:
