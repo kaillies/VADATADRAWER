@@ -156,8 +156,9 @@ def extract_screenshot_candidates(uploaded_files):
             first_values = re.findall(r'(?<![/\d])([0-5])(?![/\d])', summary_text)
             if first_values:
                 candidate['first'] = _number(first_values[-1])
-            candidate.pop('_line_index', None)
         all_candidates.extend(selected)
+        for candidate in selected:
+            candidate.pop('_line_index', None)
 
     if not all_candidates:
         raise ValueError('没有识别到 KDA 数据。请确认上传的是包含选手 KDA 的结算截图。')
