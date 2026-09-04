@@ -90,85 +90,41 @@ def extract_screenshot_candidates(uploaded_files):
 
     for uploaded_file, team in uploaded_files:
         image = Image.open(io.BytesIO(uploaded_file.getvalue())).convert('RGB')
-        image.thumbnail((1000, 6500), Image.Resampling.LANCZOS)
-        lines = _ocr_lines(image)
-        raw_texts.append(f'[{uploaded_file.name} / {team}]\n' + '\n'.join(lines))
-        occurrences = []
-        summary_by_stats = {}
-        for line_index, line in enumerate(lines):
-            match = kda_pattern.search(line)
-            if not match:
-                continue
-            prefix = line[:match.start()].strip(' |-:：')
-            name_match = name_pattern.search(prefix) or name_pattern.search(' '.join(lines[line_index:line_index + 4]))
-            name = re.sub(r'\s*#\s*', '#', name_match.group(1)).strip() if name_match else ''
-            prefix_numbers = re.findall(r'(?<!/)(\d+(?:\.\d+)?)', prefix)
-            stats = (_number(match.group(1)), _number(match.group(2)), _number(match.group(3)))
-            candidate = {
-                'name': name or f'待确认选手{len(occurrences) + 1}',
-                'team': team, 'k': stats[0], 'd': stats[1], 'a': stats[2],
-                'first': 0, 'dmg': 0, 'acs': _number(prefix_numbers[-1]) if prefix_numbers else 0,
-                '_line_index': line_index,
-            }
-            occurrences.append(candidate)
-            summary_by_stats.setdefault(stats, candidate)
-
-        unique = []
-        seen_stats = set()
-        for candidate in occurrences:
-            stats = (candidate['k'], candidate['d'], candidate['a'])
-            if stats not in seen_stats:
-                unique.append(candidate)
-                seen_stats.add(stats)
-
-        # Each mobile screenshot contains five expanded cards for one side and
-        # five compact rows for the other side. The expanded side is first for
-        # our-side screenshots and last for enemy-side screenshots.
-        if len(occurrences) >= 10:
-            selected = occurrences[:5] if team == '我方' else occurrences[-5:]
-        else:
-            selected = unique[:5]
-        for candidate in selected:
-            block_start = candidate['_line_index']
-            next_occurrence = next(
-                (other['_line_index'] for other in occurrences if other['_line_index'] > block_start),
-                block_start + 40,
-            )
-            following = [line for line in lines[block_start:next_occurrence] if line]
-            block_text = ' '.join(following)
+        width, height = image.size
+        scale = height / 7434
+        card_height = int(1030 * scale)
+        first_card_top = int((1060 if team == '我方' else 2160) * scale)
+        card_texts = []
+        selected = []
+        for index in range(5):
+            top = first_card_top + index * card_height
+            card = image.crop((0, top, width, min(height, top + card_height)))
+            card_lines = _ocr_lines(card)
+            block_text = ' '.join(card_lines)
+            card_texts.append(f'--- card {index + 1} ---\n' + '\n'.join(card_lines))
             kda_match = kda_pattern.search(block_text)
-            after_kda = block_text[kda_match.end():] if kda_match else block_text
-            pair_matches = list(pair_pattern.finditer(after_kda))
-            damage_label = re.search(
-                r'(?:回合|相合|回|合)\s*伤害[^\d]{0,12}(\d{2,3})',
-                after_kda,
-            )
-            damage_match = next(
-                (match for match in pair_matches if _number(match.group(1)) >= 50),
-                None,
-            )
+            stats = tuple(_number(value) for value in kda_match.groups()) if kda_match else (0, 0, 0)
+            name_match = name_pattern.search(block_text)
+            name = re.sub(r'\s*#\s*', '#', name_match.group(1)).strip() if name_match else ''
+            score_values = re.findall(r'(?<![/\d])([1-5]\d{2})(?![/\d])', block_text)
+            candidate = {
+                'name': name or f'待确认选手{index + 1}',
+                'team': team, 'k': stats[0], 'd': stats[1], 'a': stats[2],
+                'first': 0, 'dmg': 0, 'acs': _number(score_values[0]) if score_values else 0,
+            }
+            first_match = re.search(r'首\s*杀[^\d]{0,12}([0-5])', block_text)
+            if first_match:
+                candidate['first'] = _number(first_match.group(1))
+            pair_matches = list(pair_pattern.finditer(block_text[kda_match.end():])) if kda_match else []
+            damage_match = next((match for match in pair_matches if _number(match.group(1)) >= 50), None)
+            damage_label = re.search(r'(?:回合|相合|回|合)\s*伤害[^\d]{0,12}(\d{2,3})', block_text)
             if damage_label:
                 candidate['dmg'] = _number(damage_label.group(1))
             elif damage_match:
                 candidate['dmg'] = _number(damage_match.group(1))
-
-            header_text = after_kda[:damage_match.start()] if damage_match else after_kda
-            score_match = re.search(r'(?<![/\d])([1-5]\d{2})(?![/\d])', header_text)
-            if score_match:
-                candidate['acs'] = _number(score_match.group(1))
-
-            first_label = re.search(r'首\s*杀[^\d]{0,12}([0-5])', header_text)
-            if first_label:
-                candidate['first'] = _number(first_label.group(1))
-            else:
-                summary_text = header_text[score_match.end():] if score_match else header_text
-                summary_text = summary_text.split('团队均值', 1)[0]
-                first_values = re.findall(r'(?<![/\d])([0-5])(?![/\d])', summary_text)
-                if first_values:
-                    candidate['first'] = _number(first_values[-1])
+            selected.append(candidate)
+        raw_texts.append(f'[{uploaded_file.name} / {team} / fixed-card-layout]\n' + '\n'.join(card_texts))
         all_candidates.extend(selected)
-        for candidate in selected:
-            candidate.pop('_line_index', None)
 
     if not all_candidates:
         raise ValueError('没有识别到 KDA 数据。请确认上传的是包含选手 KDA 的结算截图。')
