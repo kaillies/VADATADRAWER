@@ -141,7 +141,8 @@ def extract_screenshot_candidates(uploaded_files):
                 (other_index for other_index, _ in occurrences if other_index > line_index),
                 len(lines),
             )
-            block_text = ' '.join(lines[line_index:next_index])
+            block_lines = lines[line_index:next_index]
+            block_text = ' '.join(block_lines)
             after_kda = block_text[kda_match.end():]
             stats = tuple(_number(value) for value in kda_match.groups())
             name_match = name_pattern.search(block_text)
@@ -162,6 +163,25 @@ def extract_screenshot_candidates(uploaded_files):
                 candidate['dmg'] = _number(damage_label.group(1))
             elif damage_match:
                 candidate['dmg'] = _number(damage_match.group(1))
+            if not first_match:
+                damage_line_index = next(
+                    (line_index for line_index, line in enumerate(block_lines)
+                     if re.search(r'(?:回合|相合|回|合)\s*伤害', line)),
+                    None,
+                )
+                if damage_line_index is None and damage_match:
+                    damage_line_index = next(
+                        (line_index for line_index, line in enumerate(block_lines)
+                         if damage_match.group(0) in line),
+                        None,
+                    )
+                if damage_line_index is not None:
+                    preceding_lines = block_lines[max(0, damage_line_index - 4):damage_line_index]
+                    preceding_numbers = []
+                    for preceding_line in preceding_lines:
+                        preceding_numbers.extend(re.findall(r'(?<![/\d])([0-5])(?![/\d])', preceding_line))
+                    if preceding_numbers:
+                        candidate['first'] = _number(preceding_numbers[-1])
             all_candidates.append(candidate)
 
     if not all_candidates:
