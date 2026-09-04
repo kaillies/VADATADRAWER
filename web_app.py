@@ -49,12 +49,12 @@ configure_chinese_font()
 
 
 AGENT_NAMES = [
-    '请选择英雄', '不死鸟 Phoenix', '炼狱 Brimstone', '贤者 Sage', '捷风 Jett',
+    '请选择英雄', '炼狱 Brimstone', '不死鸟 Phoenix', '贤者 Sage', '捷风 Jett',
     '雷兹 Raze', '幽影 Omen', '毒蛇 Viper', '零 Cypher', '猎枭 Sova',
-    '瑞娜 Reyna', '奇乐 Killjoy', ' Breach', '盖可 Gekko', '霓虹 Neon',
-    '星礈 Astra', 'KAY/O', '海神 Harbor', '铁臂 Breach',
-    '黑梦 Fade', '斯凯 Skye', '尚勃勒 Chamber', '夜露 Yoru',
-    '壹决 Iso', '钛狐 Clove', '维斯 Vyse', '图伊 Tejo', 'Waylay',
+    '芮娜 Reyna', '奇乐 Killjoy', '铁臂 Breach', '盖可 Gekko', '霓虹 Neon',
+    '星礈 Astra', 'KAY/O', '海神 Harbor', '黑梦 Fade', '斯凯 Skye',
+    '尚勃勒 Chamber', '夜露 Yoru', '壹决 Iso', '钛狐 Clove', '维斯 Vyse',
+    '钢索 Deadlock', '图伊 Tejo', 'Waylay', '迷核 Miks',
 ]
 AGENT_API_NAMES = {name.split()[-1]: name for name in AGENT_NAMES if name != '请选择英雄'}
 
@@ -441,7 +441,7 @@ for player in players:
     )
 
 def draggable_team(team, label, key):
-    names = [f'{player["name"]}  ·  {hero_names.get(str(player["name"]), "请选择英雄")}' for player in team]
+    names = [f'{hero_names.get(str(player["name"]), "请选择英雄")}  ·  {player["name"]}' for player in team]
     if sort_items is None:
         return names
     return sort_items(names, direction='vertical', key=key)
@@ -450,17 +450,29 @@ def draggable_team(team, label, key):
 left, right = st.columns(2)
 with left:
     st.markdown('#### 我方（绿/黄色）')
+    own_preview = st.columns(len(red_team))
+    for index, player in enumerate(red_team):
+        icon_url = agent_icon(hero_names.get(str(player['name'])), agent_icons)
+        if icon_url:
+            own_preview[index].image(icon_url, width=52)
+        own_preview[index].caption(hero_names.get(str(player['name']), '请选择英雄'))
     own_order = draggable_team(red_team, '我方', 'own_order')
 with right:
     st.markdown('#### 敌方（红色）')
+    enemy_preview = st.columns(len(blue_team))
+    for index, player in enumerate(blue_team):
+        icon_url = agent_icon(hero_names.get(str(player['name'])), agent_icons)
+        if icon_url:
+            enemy_preview[index].image(icon_url, width=52)
+        enemy_preview[index].caption(hero_names.get(str(player['name']), '请选择英雄'))
     enemy_order = draggable_team(blue_team, '敌方', 'enemy_order')
 
 own_by_name = {str(player['name']): player for player in red_team}
 enemy_by_name = {str(player['name']): player for player in blue_team}
-ordered_own = [own_by_name[item.split('  ·  ', 1)[0]] for item in own_order if item.split('  ·  ', 1)[0] in own_by_name]
-ordered_enemy = [enemy_by_name[item.split('  ·  ', 1)[0]] for item in enemy_order if item.split('  ·  ', 1)[0] in enemy_by_name]
+ordered_own = [own_by_name[item.split('  ·  ', 1)[1]] for item in own_order if len(item.split('  ·  ', 1)) == 2 and item.split('  ·  ', 1)[1] in own_by_name]
+ordered_enemy = [enemy_by_name[item.split('  ·  ', 1)[1]] for item in enemy_order if len(item.split('  ·  ', 1)) == 2 and item.split('  ·  ', 1)[1] in enemy_by_name]
 
-st.subheader('对位头像')
+st.subheader('对位头像（随拖动顺序更新）')
 avatar_columns = st.columns(max(len(ordered_own), len(ordered_enemy), 1))
 for index, column in enumerate(avatar_columns):
     with column:
