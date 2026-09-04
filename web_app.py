@@ -126,13 +126,14 @@ def extract_screenshot_candidates(uploaded_files):
         selected = occurrences[-5:] if len(occurrences) >= 15 else unique[:5]
         for candidate in selected:
             block_start = candidate['_line_index']
-            following = [line for line in lines[block_start:block_start + 18] if line]
-            detail_line = next((line for line in following if len(pair_pattern.findall(line)) >= 4), '')
-            pairs = pair_pattern.findall(detail_line)
+            following = [line for line in lines[block_start:block_start + 32] if line]
+            block_text = ' '.join(following)
+            pairs = pair_pattern.findall(block_text)
             if pairs:
                 candidate['dmg'] = _number(pairs[0][0])
-            for label, field in (('首杀', 'first'), ('回合伤害', 'dmg')):
-                label_match = next((re.search(rf'{label}\s*[:：]?\s*(\d+(?:\.\d+)?)', line) for line in following), None)
+            for labels, field in ((('首杀', '首次击杀', 'first'), 'first'), (('回合伤害', '伤害', 'dmg'), 'dmg')):
+                label_pattern = '|'.join(re.escape(label) for label in labels)
+                label_match = re.search(rf'(?:{label_pattern})[^\d]{{0,12}}(\d+(?:\.\d+)?)', block_text, re.IGNORECASE)
                 if label_match:
                     candidate[field] = _number(label_match.group(1))
             summary = summary_by_stats.get((candidate['k'], candidate['d'], candidate['a']))
