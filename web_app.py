@@ -111,6 +111,25 @@ def extract_screenshot_candidates(uploaded_files):
             'acs': acs,
         })
 
+    names = []
+    name_pattern = re.compile(r'([A-Za-z\u4e00-\u9fff][A-Za-z0-9\u4e00-\u9fff_ ]{0,24}#\s*\d{3,6})')
+    for line in lines:
+        match = name_pattern.search(line)
+        if match:
+            names.append(re.sub(r'\s*#\s*', '#', match.group(1)).strip())
+
+    def labeled_values(label):
+        values = []
+        pattern = re.compile(rf'{label}\s*[:：]?\s*(\d+(?:\.\d+)?)')
+        for line in lines:
+            match = pattern.search(line)
+            if match:
+                values.append(_number(match.group(1)))
+        return values
+
+    acs_values = labeled_values('战斗得分')
+    first_values = labeled_values('首杀')
+    damage_values = labeled_values('回合伤害')
     unique_candidates = []
     seen_stats = set()
     for candidate in candidates:
@@ -119,6 +138,15 @@ def extract_screenshot_candidates(uploaded_files):
             unique_candidates.append(candidate)
             seen_stats.add(stat_key)
     candidates = unique_candidates
+    for index, candidate in enumerate(candidates):
+        if index < len(names):
+            candidate['name'] = names[index]
+        if index < len(acs_values):
+            candidate['acs'] = acs_values[index]
+        if index < len(first_values):
+            candidate['first'] = first_values[index]
+        if index < len(damage_values):
+            candidate['dmg'] = damage_values[index]
     for index, candidate in enumerate(candidates):
         candidate['team'] = '我方' if index < (len(candidates) + 1) // 2 else '敌方'
 
