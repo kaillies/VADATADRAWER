@@ -1,10 +1,23 @@
 import csv
 import io
 import json
+import re
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import streamlit as st
+from PIL import Image
+
+try:
+    import pytesseract
+except ImportError:
+    pytesseract = None
+
+try:
+    from streamlit_sortables import sort_items
+except ImportError:
+    sort_items = None
 
 
 TOTAL_ROUNDS = 18
@@ -54,6 +67,95 @@ def load_players(file_name, file_bytes):
     return players
 
 
+def _ocr_lines(image):
+    if pytesseract is None:
+        raise ValueError('截图识别依赖尚未安装，请重新部署应用后再试')
+    text = pytesseract.image_to_string(image, lang='chi_sim+eng', config='--psm 11')
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _number(value):
+    try:
+        return float(str(value).replace(',', '').strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def extract_screenshot_candidates(uploaded_files):
+    lines = []
+    for uploaded_file in uploaded_files:
+        image = Image.open(io.BytesIO(uploaded_file.getvalue())).convert('RGB')
+        lines.extend(_ocr_lines(image))
+
+    candidates = []
+    kda_pattern = re.compile(r'(\d{1,2})\s*[/:|丨]\s*(\d{1,2})\s*[/:|丨]\s*(\d{1,2})')
+    for line in lines:
+        match = kda_pattern.search(line)
+        if not match:
+            continue
+        prefix = line[:match.start()].strip(' |-:：')
+        name_match = re.search(r'[\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_#-]{1,24}', prefix)
+        name = name_match.group(0) if name_match else f'待确认选手{len(candidates) + 1}'
+        prefix_numbers = re.findall(r'(?<!/)(\d+(?:\.\d+)?)', prefix)
+        trailing_numbers = re.findall(r'(?<!/)(\d+(?:\.\d+)?)', line[match.end():])
+        acs = _number(prefix_numbers[-1]) if prefix_numbers else _number(trailing_numbers[0]) if trailing_numbers else 0
+        candidates.append({
+            'name': name,
+            'team': '我方' if len(candidates) < 5 else '敌方',
+            'k': _number(match.group(1)),
+            'd': _number(match.group(2)),
+            'a': _number(match.group(3)),
+            'first': 0,
+            'dmg': 0,
+            'acs': acs,
+        })
+
+    unique_candidates = []
+    seen_stats = set()
+    for candidate in candidates:
+        stat_key = (candidate['k'], candidate['d'], candidate['a'])
+        if stat_key not in seen_stats:
+            unique_candidates.append(candidate)
+            seen_stats.add(stat_key)
+    candidates = unique_candidates
+    for index, candidate in enumerate(candidates):
+        candidate['team'] = '我方' if index < (len(candidates) + 1) // 2 else '敌方'
+
+    detail_pairs = []
+    pair_pattern = re.compile(r'(\d{1,4})\s*/\s*\d{1,4}')
+    for line in lines:
+        pairs = pair_pattern.findall(line)
+        if len(pairs) >= 4:
+            detail_pairs.append([_number(pair[0]) for pair in pairs[:4]])
+    for candidate, detail in zip(candidates, detail_pairs):
+        candidate['dmg'] = detail[0]
+    if not candidates:
+        raise ValueError('没有识别到 KDA 数据。请上传同一场比赛的结算总览图和详细表现图。')
+    return candidates, '\n'.join(lines)
+
+
+def editable_players(players):
+    frame = pd.DataFrame(players)
+    columns = ['name', 'team', 'k', 'd', 'a', 'first', 'dmg', 'acs']
+    frame = frame.reindex(columns=columns).fillna(0)
+    return st.data_editor(
+        frame,
+        hide_index=True,
+        use_container_width=True,
+        num_rows='dynamic',
+        column_config={
+            'name': '选手名称', 'team': st.column_config.SelectboxColumn('队伍', options=['我方', '敌方']),
+            'k': st.column_config.NumberColumn('击杀', min_value=0),
+            'd': st.column_config.NumberColumn('死亡', min_value=0),
+            'a': st.column_config.NumberColumn('助攻', min_value=0),
+            'first': st.column_config.NumberColumn('首杀', min_value=0),
+            'dmg': st.column_config.NumberColumn('伤害', min_value=0),
+            'acs': st.column_config.NumberColumn('战斗评分', min_value=0),
+        },
+        key='recognized_players',
+    ).to_dict('records')
+
+
 def prepare_players(players):
     for player in players:
         player['回合均伤'] = player['dmg']
@@ -84,10 +186,12 @@ def make_chart(pairings, min_vals, max_vals):
         axis.set_theta_direction(-1)
         red_values = [red['norm'][label] for label in LABELS] + [red['norm'][LABELS[0]]]
         blue_values = [blue['norm'][label] for label in LABELS] + [blue['norm'][LABELS[0]]]
-        axis.plot(closed_angles, red_values, 'o-', linewidth=2.5, color='#e5484d', label=red['display_name'])
-        axis.fill(closed_angles, red_values, alpha=0.2, color='#e5484d')
-        axis.plot(closed_angles, blue_values, 'o-', linewidth=2.5, color='#2878d0', label=blue['display_name'])
-        axis.fill(closed_angles, blue_values, alpha=0.2, color='#2878d0')
+        red_color = '#16b8aa' if red['team'] == '我方' else '#e5484d'
+        blue_color = '#16b8aa' if blue['team'] == '我方' else '#e5484d'
+        axis.plot(closed_angles, red_values, 'o-', linewidth=2.5, color=red_color, label=red['display_name'])
+        axis.fill(closed_angles, red_values, alpha=0.2, color=red_color)
+        axis.plot(closed_angles, blue_values, 'o-', linewidth=2.5, color=blue_color, label=blue['display_name'])
+        axis.fill(closed_angles, blue_values, alpha=0.2, color=blue_color)
         axis.set_xticks(angles)
         axis.set_xticklabels([f'{label}\n({min_vals[label]:.2f}~{max_vals[label]:.2f})' for label in LABELS], fontsize=8)
         axis.set_ylim(0, 100)
@@ -113,20 +217,43 @@ st.markdown('''
 </style>
 ''', unsafe_allow_html=True)
 st.title('无畏契约对位工具')
-st.caption('上传选手原始数据，设置对位组和英雄名称，然后生成对比雷达图。')
+st.caption('支持结算截图 OCR，也支持 CSV、JSON 和 Excel。截图识别后可先修改数据，再拖动双方顺序进行对位。')
 
-uploaded_file = st.file_uploader('选择选手原始数据文件', type=['csv', 'json', 'xlsx', 'xls'])
-if uploaded_file is None:
-    st.info('请先上传 CSV、JSON 或 Excel 文件。')
-    st.stop()
+source = st.radio('数据来源', ['上传截图', '上传 CSV / JSON / Excel'], horizontal=True)
+players = None
+if source == '上传截图':
+    st.info('请上传同一场比赛的两张图：结算总览图和详细表现图。红色识别为敌方，绿色或黄色识别为我方。')
+    screenshots = st.file_uploader(
+        '上传结算截图（建议同时上传两张）',
+        type=['png', 'jpg', 'jpeg', 'webp'],
+        accept_multiple_files=True,
+    )
+    if screenshots and st.button('识别截图数据', type='primary'):
+        try:
+            recognized, raw_text = extract_screenshot_candidates(screenshots)
+            st.session_state['ocr_players'] = recognized
+            st.session_state['ocr_text'] = raw_text
+        except Exception as error:
+            st.error(f'截图识别失败：{error}')
+    if 'ocr_players' not in st.session_state:
+        st.stop()
+    st.subheader('确认或修改识别结果')
+    st.caption('OCR 可能误读中文昵称或数字，请重点检查 KDA、伤害和战斗评分。')
+    players = editable_players(st.session_state['ocr_players'])
+    with st.expander('查看原始 OCR 文本'):
+        st.text(st.session_state.get('ocr_text', ''))
+else:
+    uploaded_file = st.file_uploader('选择选手原始数据文件', type=['csv', 'json', 'xlsx', 'xls'])
+    if uploaded_file is None:
+        st.info('请先上传 CSV、JSON 或 Excel 文件。')
+        st.stop()
+    try:
+        players = load_players(uploaded_file.name, uploaded_file.getvalue())
+    except Exception as error:
+        st.error(f'数据读取失败：{error}')
+        st.stop()
 
-try:
-    players = load_players(uploaded_file.name, uploaded_file.getvalue())
-    min_vals, max_vals = prepare_players(players)
-except Exception as error:
-    st.error(f'数据读取失败：{error}')
-    st.stop()
-
+players = [player for player in players if str(player.get('name', '')).strip()]
 red_team = [player for player in players if player['team'] == '我方']
 blue_team = [player for player in players if player['team'] == '敌方']
 if not red_team or not blue_team:
@@ -135,43 +262,42 @@ if not red_team or not blue_team:
 if len(red_team) != 5 or len(blue_team) != 5:
     st.warning(f'当前读取我方 {len(red_team)} 人、敌方 {len(blue_team)} 人，建议双方各 5 人。')
 
-st.subheader('设置对位')
-left, right = st.columns(2)
-red_groups = []
-blue_groups = []
-red_names = []
-blue_names = []
-with left:
-    st.markdown('#### 我方（红色）')
-    for index, player in enumerate(red_team):
-        group_col, hero_col = st.columns([1, 2])
-        with group_col:
-            red_groups.append(st.selectbox(f'{player["name"]} 组', range(1, 6), key=f'red_group_{index}'))
-        with hero_col:
-            red_names.append(st.text_input('英雄名称', key=f'red_hero_{index}', placeholder='可选'))
-with right:
-    st.markdown('#### 敌方（蓝色）')
-    for index, player in enumerate(blue_team):
-        group_col, hero_col = st.columns([1, 2])
-        with group_col:
-            blue_groups.append(st.selectbox(f'{player["name"]} 组', range(1, 6), key=f'blue_group_{index}'))
-        with hero_col:
-            blue_names.append(st.text_input('英雄名称', key=f'blue_hero_{index}', placeholder='可选'))
+st.subheader('拖动设置对位')
+st.caption('把每一方的选手拖动排序；两列中相同序号的选手会进行对位。')
 
-if st.button('生成五组对比图', type='primary', use_container_width=True):
-    pairings = [None] * 5
-    for team, groups, display_names in ((red_team, red_groups, red_names), (blue_team, blue_groups, blue_names)):
-        for index, group in enumerate(groups):
-            player = team[index].copy()
-            player['display_name'] = display_names[index].strip() or player['name'].split('#')[0]
-            pair_index = group - 1
-            existing = pairings[pair_index]
-            pairings[pair_index] = (player, existing[1]) if team is red_team and existing else (existing[0], player) if existing else (player, None) if team is red_team else (None, player)
-    valid_pairings = [pair for pair in pairings if pair and pair[0] and pair[1]]
-    if not valid_pairings:
-        st.error('没有完整的配对，无法生成图表。')
-    else:
-        st.pyplot(make_chart(valid_pairings, min_vals, max_vals), clear_figure=True)
-        missing_count = 5 - len(valid_pairings)
-        if missing_count:
-            st.warning(f'已生成 {len(valid_pairings)} 组完整对位，另有 {missing_count} 组不完整。')
+def draggable_team(team, label, key):
+    names = [str(player['name']) for player in team]
+    if sort_items is None:
+        return names
+    return sort_items(names, direction='vertical', key=key)
+
+
+left, right = st.columns(2)
+with left:
+    st.markdown('#### 我方（绿/黄色）')
+    own_order = draggable_team(red_team, '我方', 'own_order')
+with right:
+    st.markdown('#### 敌方（红色）')
+    enemy_order = draggable_team(blue_team, '敌方', 'enemy_order')
+
+own_by_name = {str(player['name']): player for player in red_team}
+enemy_by_name = {str(player['name']): player for player in blue_team}
+ordered_own = [own_by_name[name] for name in own_order if name in own_by_name]
+ordered_enemy = [enemy_by_name[name] for name in enemy_order if name in enemy_by_name]
+
+hero_names = {}
+for player in ordered_own + ordered_enemy:
+    hero_names[str(player['name'])] = st.text_input(
+        f'{player["name"]} 的英雄名称',
+        key=f'hero_{player["name"]}',
+        placeholder='可选',
+    )
+
+if st.button('生成六维对比图', type='primary', use_container_width=True):
+    for player in ordered_own + ordered_enemy:
+        player['display_name'] = hero_names[str(player['name'])].strip() or str(player['name']).split('#')[0]
+    pairings = list(zip(ordered_own, ordered_enemy))
+    min_vals, max_vals = prepare_players(ordered_own + ordered_enemy)
+    st.pyplot(make_chart(pairings, min_vals, max_vals), clear_figure=True)
+    if len(ordered_own) != len(ordered_enemy):
+        st.warning('双方人数不同，仅生成前面能够配对的对比图。')
