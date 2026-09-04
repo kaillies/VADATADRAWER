@@ -3,6 +3,7 @@ import io
 import json
 import re
 from pathlib import Path
+from urllib.request import urlopen
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,6 +11,7 @@ import pandas as pd
 import streamlit as st
 from PIL import Image
 from matplotlib import font_manager
+from matplotlib.offsetbox import AnnotationBbox, OffsetImage
 
 
 def configure_chinese_font():
@@ -44,6 +46,53 @@ def configure_chinese_font():
 
 
 configure_chinese_font()
+
+
+AGENT_NAMES = [
+    '请选择英雄', '不死鸟 Phoenix', '炼狱 Brimstone', '贤者 Sage', '捷风 Jett',
+    '雷兹 Raze', '幽影 Omen', '毒蛇 Viper', '零 Cypher', '猎枭 Sova',
+    '瑞娜 Reyna', '奇乐 Killjoy', ' Breach', '盖可 Gekko', '霓虹 Neon',
+    '星礈 Astra', 'KAY/O', '海神 Harbor', '铁臂 Breach',
+    '黑梦 Fade', '斯凯 Skye', '尚勃勒 Chamber', '夜露 Yoru',
+    '壹决 Iso', '钛狐 Clove', '维斯 Vyse', '图伊 Tejo', 'Waylay',
+]
+AGENT_API_NAMES = {name.split()[-1]: name for name in AGENT_NAMES if name != '请选择英雄'}
+
+
+@st.cache_data(show_spinner=False)
+def load_agent_icons():
+    try:
+        with urlopen('https://valorant-api.com/v1/agents?isPlayableCharacter=true', timeout=8) as response:
+            payload = json.loads(response.read().decode('utf-8'))
+        return {
+            item['displayName']: item['displayIcon']
+            for item in payload.get('data', [])
+            if item.get('displayName') and item.get('displayIcon')
+        }
+    except Exception:
+        return {}
+
+
+def agent_key(label):
+    return label.split()[-1] if label else ''
+
+
+def agent_icon(label, icons):
+    if not label or label == '请选择英雄':
+        return None
+    english_name = agent_key(label)
+    return next((url for name, url in icons.items() if name.lower() == english_name.lower()), None)
+
+
+@st.cache_data(show_spinner=False)
+def load_agent_image(url):
+    if not url:
+        return None
+    try:
+        with urlopen(url, timeout=8) as response:
+            return Image.open(io.BytesIO(response.read())).convert('RGBA')
+    except Exception:
+        return None
 
 try:
     import pytesseract
@@ -295,11 +344,23 @@ def make_chart(pairings, min_vals, max_vals):
         axis.set_yticklabels(['20', '40', '60', '80', '100'], fontsize=7)
         axis.grid(True, linestyle='--', alpha=0.6)
         axis.set_title(f'组{index + 1}: {red["display_name"]} vs {blue["display_name"]}', fontsize=11, pad=14)
-        axis.legend(loc='upper right', bbox_to_anchor=(1.12, 1.0), fontsize=8)
+        axis.legend(loc='upper right', bbox_to_anchor=(1.08, 1.0), fontsize=8)
     for axis in axes_flat[len(pairings):]:
         axis.axis('off')
     figure.suptitle('无畏契约对位雷达图', fontsize=19, fontweight='bold')
-    figure.tight_layout()
+    figure.tight_layout(rect=(0.06, 0.02, 0.94, 0.94))
+    for index, (red, blue) in enumerate(pairings):
+        axis_position = axes_flat[index].get_position()
+        for x_position, player in ((axis_position.x0 - 0.035, red), (axis_position.x1 + 0.035, blue)):
+            avatar = load_agent_image(player.get('icon_url'))
+            if avatar is not None:
+                figure.add_artist(AnnotationBbox(
+                    OffsetImage(avatar, zoom=0.12),
+                    (x_position, axis_position.y0 + axis_position.height / 2),
+                    xycoords=figure.transFigure,
+                    frameon=True,
+                    bboxprops={'boxstyle': 'round,pad=0.25', 'fc': 'white', 'ec': '#d8dee8'},
+                ))
     return figure
 
 
@@ -366,10 +427,21 @@ if len(red_team) != 5 or len(blue_team) != 5:
     st.warning(f'当前读取我方 {len(red_team)} 人、敌方 {len(blue_team)} 人，建议双方各 5 人。')
 
 st.subheader('拖动设置对位')
-st.caption('把每一方的选手拖动排序；两列中相同序号的选手会进行对位。')
+st.caption('先为选手选择英雄，再拖动头像排序；两列中相同序号的英雄会进行对位。')
+
+agent_icons = load_agent_icons()
+hero_names = {}
+for player in players:
+    player_name = str(player['name'])
+    hero_names[player_name] = st.selectbox(
+        f'{player_name} 的英雄',
+        AGENT_NAMES,
+        format_func=lambda label: label,
+        key=f'hero_{player_name}',
+    )
 
 def draggable_team(team, label, key):
-    names = [str(player['name']) for player in team]
+    names = [f'{player["name"]}  ·  {hero_names.get(str(player["name"]), "请选择英雄")}' for player in team]
     if sort_items is None:
         return names
     return sort_items(names, direction='vertical', key=key)
@@ -385,20 +457,26 @@ with right:
 
 own_by_name = {str(player['name']): player for player in red_team}
 enemy_by_name = {str(player['name']): player for player in blue_team}
-ordered_own = [own_by_name[name] for name in own_order if name in own_by_name]
-ordered_enemy = [enemy_by_name[name] for name in enemy_order if name in enemy_by_name]
+ordered_own = [own_by_name[item.split('  ·  ', 1)[0]] for item in own_order if item.split('  ·  ', 1)[0] in own_by_name]
+ordered_enemy = [enemy_by_name[item.split('  ·  ', 1)[0]] for item in enemy_order if item.split('  ·  ', 1)[0] in enemy_by_name]
 
-hero_names = {}
-for player in ordered_own + ordered_enemy:
-    hero_names[str(player['name'])] = st.text_input(
-        f'{player["name"]} 的英雄名称',
-        key=f'hero_{player["name"]}',
-        placeholder='可选',
-    )
+st.subheader('对位头像')
+avatar_columns = st.columns(max(len(ordered_own), len(ordered_enemy), 1))
+for index, column in enumerate(avatar_columns):
+    with column:
+        for team_players in (ordered_own, ordered_enemy):
+            if index < len(team_players):
+                player = team_players[index]
+                icon_url = agent_icon(hero_names.get(str(player['name'])), agent_icons)
+                if icon_url:
+                    st.image(icon_url, width=58)
+                else:
+                    st.caption(hero_names.get(str(player['name']), '请选择英雄'))
 
 if st.button('生成六维对比图', type='primary', use_container_width=True):
     for player in ordered_own + ordered_enemy:
-        player['display_name'] = hero_names[str(player['name'])].strip() or str(player['name']).split('#')[0]
+        player['display_name'] = hero_names.get(str(player['name']), '请选择英雄')
+        player['icon_url'] = agent_icon(player['display_name'], agent_icons)
     pairings = list(zip(ordered_own, ordered_enemy))
     min_vals, max_vals = prepare_players(ordered_own + ordered_enemy)
     st.pyplot(make_chart(pairings, min_vals, max_vals), clear_figure=True)
