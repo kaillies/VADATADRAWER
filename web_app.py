@@ -214,33 +214,32 @@ def extract_screenshot_candidates(uploaded_files):
         positioned_lines = _ocr_positioned_lines(image)
         lines = [line['text'] for line in positioned_lines]
         raw_texts.append(f'[{uploaded_file.name} / {team} / position-anchored]\n' + '\n'.join(lines))
-        occurrences = []
-        for line_index, line in enumerate(lines):
-            match = kda_pattern.search(line)
-            if match:
-                occurrences.append((line_index, match, positioned_lines[line_index]['top']))
-        if len(occurrences) < 5:
-            raise ValueError(f'{uploaded_file.name} 未定位到至少 5 条 KDA 数据')
         height = image.height
-        expanded_start = int(height * (0.12 if team == '我方' else 0.28))
-        expanded_end = int(height * (0.86 if team == '我方' else 0.92))
-        expanded_occurrences = [
-            occurrence for occurrence in occurrences
-            if expanded_start <= occurrence[2] <= expanded_end
+        expanded_start = int(height * (0.13 if team == '我方' else 0.29))
+        expanded_end = int(height * (0.84 if team == '我方' else 0.96))
+        card_edges = [
+            round(expanded_start + (expanded_end - expanded_start) * index / 5)
+            for index in range(6)
         ]
-        if len(expanded_occurrences) < 5:
-            expanded_occurrences = occurrences[:5] if team == '我方' else occurrences[-5:]
-        selected_occurrences = sorted(expanded_occurrences, key=lambda occurrence: occurrence[2])[:5]
-        selected_line_indexes = [occurrence[0] for occurrence in selected_occurrences]
-        for index, (line_index, kda_match, _) in enumerate(selected_occurrences):
-            next_index = (
-                selected_line_indexes[index + 1]
-                if index + 1 < len(selected_line_indexes)
-                else next((line_no for line_no, line in enumerate(positioned_lines) if line['top'] > expanded_end), len(lines))
-            )
-            block_lines = lines[line_index:next_index]
+        for index in range(5):
+            card_top, card_bottom = card_edges[index], card_edges[index + 1]
+            card_indexes = [
+                line_index for line_index, line in enumerate(positioned_lines)
+                if card_top <= line['top'] < card_bottom
+            ]
+            card_lines = [lines[line_index] for line_index in card_indexes]
+            kda_candidates = [
+                (line_index, kda_pattern.search(lines[line_index]))
+                for line_index in card_indexes
+                if kda_pattern.search(lines[line_index])
+            ]
+            if not kda_candidates:
+                raise ValueError(f'{uploaded_file.name} 第 {index + 1} 个详情区域未识别到 KDA')
+            line_index, kda_match = kda_candidates[0]
+            block_lines = card_lines
             block_text = ' '.join(block_lines)
-            after_kda = block_text[kda_match.end():]
+            kda_in_block = kda_pattern.search(block_text)
+            after_kda = block_text[kda_in_block.end():] if kda_in_block else block_text
             stats = tuple(_number(value) for value in kda_match.groups())
             normalized_block = re.sub(r'(?<=[A-Za-z\u4e00-\u9fff0-9_])\s+(?=[A-Za-z\u4e00-\u9fff0-9_#])', '', block_text)
             name_matches = name_pattern.findall(normalized_block)
