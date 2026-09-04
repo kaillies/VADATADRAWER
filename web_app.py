@@ -54,7 +54,7 @@ AGENT_NAMES = [
     '芮娜 Reyna', '奇乐 Killjoy', '铁臂 Breach', '盖可 Gekko', '霓虹 Neon',
     '星礈 Astra', 'KAY/O', '海神 Harbor', '黑梦 Fade', '斯凯 Skye',
     '尚勃勒 Chamber', '夜露 Yoru', '壹决 Iso', '钛狐 Clove', '维斯 Vyse',
-    '钢索 Deadlock', '图伊 Tejo', 'Waylay', '迷核 Miks',
+    '钢索 Deadlock', '图伊 Tejo', 'Waylay', '迷核 Miks', '暮蝶 Veto',
 ]
 AGENT_API_NAMES = {name.split()[-1]: name for name in AGENT_NAMES if name != '请选择英雄'}
 
