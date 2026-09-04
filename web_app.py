@@ -85,6 +85,7 @@ def extract_screenshot_candidates(uploaded_files):
     lines = []
     for uploaded_file in uploaded_files:
         image = Image.open(io.BytesIO(uploaded_file.getvalue())).convert('RGB')
+        image.thumbnail((900, 6000), Image.Resampling.LANCZOS)
         lines.extend(_ocr_lines(image))
 
     candidates = []
