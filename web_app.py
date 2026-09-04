@@ -8,6 +8,24 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from PIL import Image
+from matplotlib import font_manager
+
+
+def configure_chinese_font():
+    font_candidates = [
+        'Noto Sans CJK SC', 'Noto Sans SC', 'Microsoft YaHei',
+        'SimHei', 'DengXian', 'Arial Unicode MS',
+    ]
+    installed_fonts = {font.name for font in font_manager.fontManager.ttflist}
+    selected_font = next((font for font in font_candidates if font in installed_fonts), None)
+    if selected_font:
+        plt.rcParams['font.sans-serif'] = [selected_font, 'DejaVu Sans']
+    else:
+        plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
+    plt.rcParams['axes.unicode_minus'] = False
+
+
+configure_chinese_font()
 
 try:
     import pytesseract

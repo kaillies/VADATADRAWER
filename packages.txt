@@ -1,2 +1,3 @@
 tesseract-ocr
 tesseract-ocr-chi-sim
+fonts-noto-cjk
