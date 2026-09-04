@@ -206,10 +206,6 @@ def extract_screenshot_candidates(uploaded_files):
     pair_pattern = re.compile(r'(\d{1,4})\s*/\s*(\d{1,4})')
     name_pattern = re.compile(r'([A-Za-z\u4e00-\u9fff][A-Za-z0-9\u4e00-\u9fff_]{0,24}[#＃]\s*\d{3,6})')
     loose_name_pattern = re.compile(r'([A-Za-z\u4e00-\u9fff][A-Za-z0-9\u4e00-\u9fff_]{1,24})[#＃\s]+(\d{4,6})')
-    known_names = {
-        (21.0, 9.0, 4.0): '压力视为调情#12505',
-        (11.0, 12.0, 4.0): '勇往直前dd#41846',
-    }
     all_candidates = []
     raw_texts = []
 
@@ -222,14 +218,25 @@ def extract_screenshot_candidates(uploaded_files):
         for line_index, line in enumerate(lines):
             match = kda_pattern.search(line)
             if match:
-                occurrences.append((line_index, match))
+                occurrences.append((line_index, match, positioned_lines[line_index]['top']))
         if len(occurrences) < 5:
             raise ValueError(f'{uploaded_file.name} 未定位到至少 5 条 KDA 数据')
-        selected_occurrences = occurrences[:5] if team == '我方' else occurrences[-5:]
-        for index, (line_index, kda_match) in enumerate(selected_occurrences):
-            next_index = next(
-                (other_index for other_index, _ in occurrences if other_index > line_index),
-                len(lines),
+        height = image.height
+        expanded_start = int(height * (0.12 if team == '我方' else 0.28))
+        expanded_end = int(height * (0.86 if team == '我方' else 0.92))
+        expanded_occurrences = [
+            occurrence for occurrence in occurrences
+            if expanded_start <= occurrence[2] <= expanded_end
+        ]
+        if len(expanded_occurrences) < 5:
+            expanded_occurrences = occurrences[:5] if team == '我方' else occurrences[-5:]
+        selected_occurrences = sorted(expanded_occurrences, key=lambda occurrence: occurrence[2])[:5]
+        selected_line_indexes = [occurrence[0] for occurrence in selected_occurrences]
+        for index, (line_index, kda_match, _) in enumerate(selected_occurrences):
+            next_index = (
+                selected_line_indexes[index + 1]
+                if index + 1 < len(selected_line_indexes)
+                else next((line_no for line_no, line in enumerate(positioned_lines) if line['top'] > expanded_end), len(lines))
             )
             block_lines = lines[line_index:next_index]
             block_text = ' '.join(block_lines)
@@ -246,8 +253,6 @@ def extract_screenshot_candidates(uploaded_files):
                 first_cjk = re.search(r'[\u4e00-\u9fff]', name)
                 if first_cjk:
                     name = name[first_cjk.start():]
-            if not name:
-                name = known_names.get(stats, '')
             score_values = re.findall(r'(?<![/\d])([1-5]\d{2})(?![/\d])', after_kda)
             candidate = {
                 'name': name or f'待确认选手{index + 1}',
