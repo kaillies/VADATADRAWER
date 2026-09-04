@@ -74,6 +74,41 @@ def _ocr_lines(image):
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
+def _ocr_positioned_lines(image):
+    if pytesseract is None:
+        raise ValueError('截图识别依赖尚未安装，请重新部署应用后再试')
+    data = pytesseract.image_to_data(
+        image,
+        lang='chi_sim+eng',
+        config='--psm 11',
+        output_type=pytesseract.Output.DICT,
+    )
+    words = []
+    for index, text in enumerate(data['text']):
+        text = text.strip()
+        if not text:
+            continue
+        try:
+            confidence = float(data['conf'][index])
+        except (TypeError, ValueError):
+            confidence = -1
+        if confidence >= 0:
+            words.append((int(data['top'][index]), int(data['left'][index]), text))
+    words.sort()
+    lines = []
+    for top, left, text in words:
+        if not lines or top - lines[-1]['top'] > 22:
+            lines.append({'top': top, 'bottom': top + 30, 'words': [(left, text)]})
+        else:
+            line = lines[-1]
+            line['bottom'] = max(line['bottom'], top + 30)
+            line['words'].append((left, text))
+    for line in lines:
+        line['words'].sort()
+        line['text'] = ' '.join(text for _, text in line['words'])
+    return lines
+
+
 def _number(value):
     try:
         return float(str(value).replace(',', '').strip())
@@ -90,41 +125,44 @@ def extract_screenshot_candidates(uploaded_files):
 
     for uploaded_file, team in uploaded_files:
         image = Image.open(io.BytesIO(uploaded_file.getvalue())).convert('RGB')
-        width, height = image.size
-        scale = height / 7434
-        card_height = int(1030 * scale)
-        first_card_top = int((1060 if team == '我方' else 2160) * scale)
-        card_texts = []
-        selected = []
-        for index in range(5):
-            top = first_card_top + index * card_height
-            card = image.crop((0, top, width, min(height, top + card_height)))
-            card_lines = _ocr_lines(card)
-            block_text = ' '.join(card_lines)
-            card_texts.append(f'--- card {index + 1} ---\n' + '\n'.join(card_lines))
-            kda_match = kda_pattern.search(block_text)
-            stats = tuple(_number(value) for value in kda_match.groups()) if kda_match else (0, 0, 0)
+        positioned_lines = _ocr_positioned_lines(image)
+        lines = [line['text'] for line in positioned_lines]
+        raw_texts.append(f'[{uploaded_file.name} / {team} / position-anchored]\n' + '\n'.join(lines))
+        occurrences = []
+        for line_index, line in enumerate(lines):
+            match = kda_pattern.search(line)
+            if match:
+                occurrences.append((line_index, match))
+        if len(occurrences) < 5:
+            raise ValueError(f'{uploaded_file.name} 未定位到至少 5 条 KDA 数据')
+        selected_occurrences = occurrences[:5] if team == '我方' else occurrences[-5:]
+        for index, (line_index, kda_match) in enumerate(selected_occurrences):
+            next_index = next(
+                (other_index for other_index, _ in occurrences if other_index > line_index),
+                len(lines),
+            )
+            block_text = ' '.join(lines[line_index:next_index])
+            after_kda = block_text[kda_match.end():]
+            stats = tuple(_number(value) for value in kda_match.groups())
             name_match = name_pattern.search(block_text)
             name = re.sub(r'\s*#\s*', '#', name_match.group(1)).strip() if name_match else ''
-            score_values = re.findall(r'(?<![/\d])([1-5]\d{2})(?![/\d])', block_text)
+            score_values = re.findall(r'(?<![/\d])([1-5]\d{2})(?![/\d])', after_kda)
             candidate = {
                 'name': name or f'待确认选手{index + 1}',
                 'team': team, 'k': stats[0], 'd': stats[1], 'a': stats[2],
                 'first': 0, 'dmg': 0, 'acs': _number(score_values[0]) if score_values else 0,
             }
-            first_match = re.search(r'首\s*杀[^\d]{0,12}([0-5])', block_text)
+            first_match = re.search(r'首\s*杀[^\d]{0,12}([0-5])', after_kda)
             if first_match:
                 candidate['first'] = _number(first_match.group(1))
-            pair_matches = list(pair_pattern.finditer(block_text[kda_match.end():])) if kda_match else []
+            pair_matches = list(pair_pattern.finditer(after_kda))
             damage_match = next((match for match in pair_matches if _number(match.group(1)) >= 50), None)
-            damage_label = re.search(r'(?:回合|相合|回|合)\s*伤害[^\d]{0,12}(\d{2,3})', block_text)
+            damage_label = re.search(r'(?:回合|相合|回|合)\s*伤害[^\d]{0,12}(\d{2,3})', after_kda)
             if damage_label:
                 candidate['dmg'] = _number(damage_label.group(1))
             elif damage_match:
                 candidate['dmg'] = _number(damage_match.group(1))
-            selected.append(candidate)
-        raw_texts.append(f'[{uploaded_file.name} / {team} / fixed-card-layout]\n' + '\n'.join(card_texts))
-        all_candidates.extend(selected)
+            all_candidates.append(candidate)
 
     if not all_candidates:
         raise ValueError('没有识别到 KDA 数据。请确认上传的是包含选手 KDA 的结算截图。')
