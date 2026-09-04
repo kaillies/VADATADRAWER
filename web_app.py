@@ -121,9 +121,13 @@ def extract_screenshot_candidates(uploaded_files):
                 unique.append(candidate)
                 seen_stats.add(stats)
 
-        # The long mobile result page repeats the five expanded cards after the
-        # ten compact scoreboard rows. Prefer those last five records.
-        selected = occurrences[-5:] if len(occurrences) >= 15 else unique[:5]
+        # Each mobile screenshot contains five expanded cards for one side and
+        # five compact rows for the other side. The expanded side is first for
+        # our-side screenshots and last for enemy-side screenshots.
+        if len(occurrences) >= 10:
+            selected = occurrences[:5] if team == '我方' else occurrences[-5:]
+        else:
+            selected = unique[:5]
         for candidate in selected:
             block_start = candidate['_line_index']
             following = [line for line in lines[block_start:block_start + 40] if line]
