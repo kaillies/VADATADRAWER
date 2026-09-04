@@ -139,11 +139,17 @@ def extract_screenshot_candidates(uploaded_files):
             kda_match = kda_pattern.search(block_text)
             after_kda = block_text[kda_match.end():] if kda_match else block_text
             pair_matches = list(pair_pattern.finditer(after_kda))
+            damage_label = re.search(
+                r'(?:回合|相合|回|合)\s*伤害[^\d]{0,12}(\d{2,3})',
+                after_kda,
+            )
             damage_match = next(
                 (match for match in pair_matches if _number(match.group(1)) >= 50),
                 None,
             )
-            if damage_match:
+            if damage_label:
+                candidate['dmg'] = _number(damage_label.group(1))
+            elif damage_match:
                 candidate['dmg'] = _number(damage_match.group(1))
 
             header_text = after_kda[:damage_match.start()] if damage_match else after_kda
@@ -151,11 +157,15 @@ def extract_screenshot_candidates(uploaded_files):
             if score_match:
                 candidate['acs'] = _number(score_match.group(1))
 
-            summary_text = header_text[score_match.end():] if score_match else header_text
-            summary_text = summary_text.split('团队均值', 1)[0]
-            first_values = re.findall(r'(?<![/\d])([0-5])(?![/\d])', summary_text)
-            if first_values:
-                candidate['first'] = _number(first_values[-1])
+            first_label = re.search(r'首\s*杀[^\d]{0,12}([0-5])', header_text)
+            if first_label:
+                candidate['first'] = _number(first_label.group(1))
+            else:
+                summary_text = header_text[score_match.end():] if score_match else header_text
+                summary_text = summary_text.split('团队均值', 1)[0]
+                first_values = re.findall(r'(?<![/\d])([0-5])(?![/\d])', summary_text)
+                if first_values:
+                    candidate['first'] = _number(first_values[-1])
         all_candidates.extend(selected)
         for candidate in selected:
             candidate.pop('_line_index', None)
