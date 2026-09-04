@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import re
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,8 +13,25 @@ from matplotlib import font_manager
 
 
 def configure_chinese_font():
+    font_paths = [
+        Path('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc'),
+        Path('/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc'),
+        Path('/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf'),
+        Path('C:/Windows/Fonts/NotoSansSC-VF.ttf'),
+        Path('C:/Windows/Fonts/msyh.ttc'),
+        Path('C:/Windows/Fonts/simhei.ttf'),
+    ]
+    for font_path in font_paths:
+        if font_path.exists():
+            font_manager.fontManager.addfont(str(font_path))
+            font_name = font_manager.FontProperties(fname=str(font_path)).get_name()
+            plt.rcParams['font.sans-serif'] = [font_name]
+            plt.rcParams['font.family'] = 'sans-serif'
+            plt.rcParams['axes.unicode_minus'] = False
+            return
+
     font_candidates = [
-        'Noto Sans CJK SC', 'Noto Sans SC', 'Microsoft YaHei',
+        'Noto Sans CJK SC', 'Noto Sans CJK JP', 'Noto Sans SC', 'Microsoft YaHei',
         'SimHei', 'DengXian', 'Arial Unicode MS',
     ]
     installed_fonts = {font.name for font in font_manager.fontManager.ttflist}
