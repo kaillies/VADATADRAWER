@@ -130,20 +130,32 @@ def extract_screenshot_candidates(uploaded_files):
             selected = unique[:5]
         for candidate in selected:
             block_start = candidate['_line_index']
-            following = [line for line in lines[block_start:block_start + 40] if line]
+            next_occurrence = next(
+                (other['_line_index'] for other in occurrences if other['_line_index'] > block_start),
+                block_start + 40,
+            )
+            following = [line for line in lines[block_start:next_occurrence] if line]
             block_text = ' '.join(following)
-            detail_text = ' '.join(following[1:])
-            pairs = pair_pattern.findall(detail_text)
-            if pairs:
-                candidate['dmg'] = _number(pairs[0][0])
-            score_match = re.search(r'(?:战斗|得分|评分)[^\d]{0,16}([1-5]\d{2})', block_text)
+            kda_match = kda_pattern.search(block_text)
+            after_kda = block_text[kda_match.end():] if kda_match else block_text
+            pair_matches = list(pair_pattern.finditer(after_kda))
+            damage_match = next(
+                (match for match in pair_matches if _number(match.group(1)) >= 50),
+                None,
+            )
+            if damage_match:
+                candidate['dmg'] = _number(damage_match.group(1))
+
+            header_text = after_kda[:damage_match.start()] if damage_match else after_kda
+            score_match = re.search(r'(?<![/\d])([1-5]\d{2})(?![/\d])', header_text)
             if score_match:
                 candidate['acs'] = _number(score_match.group(1))
-            for labels, field in ((('首杀', '首次击杀', 'first'), 'first'), (('回合伤害', '伤害', 'dmg'), 'dmg')):
-                label_pattern = '|'.join(re.escape(label) for label in labels)
-                label_match = re.search(rf'(?:{label_pattern})[^\d]{{0,12}}(\d+(?:\.\d+)?)', block_text, re.IGNORECASE)
-                if label_match:
-                    candidate[field] = _number(label_match.group(1))
+
+            summary_text = header_text[score_match.end():] if score_match else header_text
+            summary_text = summary_text.split('团队均值', 1)[0]
+            first_values = re.findall(r'(?<![/\d])([0-5])(?![/\d])', summary_text)
+            if first_values:
+                candidate['first'] = _number(first_values[-1])
             candidate.pop('_line_index', None)
         all_candidates.extend(selected)
 
